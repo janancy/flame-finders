@@ -2,31 +2,39 @@ from pathlib import Path
 
 import pandas as pd
 import plotly.express as px
+import requests
 import streamlit as st
 
 st.set_page_config(page_title="Flame in Freefall", layout="wide")
-BASE = Path(__file__).parent
+
+try:
+    LAMBDA_URL = st.secrets["LAMBDA_URL"]
+    API_HEADERS = {"x-app-token": st.secrets["APP_TOKEN"]}
+except Exception:
+    st.error("Missing secrets. Add LAMBDA_URL and APP_TOKEN to .streamlit/secrets.toml.")
+    st.stop()
 
 
-@st.cache_data
+def call_api(params):
+    r = requests.get(LAMBDA_URL, params=params, headers=API_HEADERS, timeout=30)
+    r.raise_for_status()
+    return r.json()
+
+
+@st.cache_data(ttl=600)
 def load_tables():
-    """Load every '...Experimental table...' CSV into a dict of DataFrames."""
+    """Ask the Lambda function for every table stored in S3."""
+    files = call_api({"action": "list"})["files"]
     tables = {}
-    seen = set()
-    for path in sorted(BASE.rglob("*Experimental table*.csv")):
-        if "(1)" in path.name or path.name in seen:  # skip duplicate downloads
-            continue
-        seen.add(path.name)
-        stem = path.stem
-        psi_id = stem.split("_")[0]
-        label = stem.split("Experimental table_", 1)[-1]
-        try:
-            df = pd.read_csv(path, encoding_errors="replace", on_bad_lines="skip")
-        except Exception:
-            continue
+    for key in files:
+        rows = call_api({"action": "table", "key": key})["rows"]
+        df = pd.DataFrame(rows)
         df = df.dropna(how="all").dropna(axis=1, how="all")
         if df.empty:
             continue
+        stem = Path(key).stem
+        psi_id = stem.split("_")[0]
+        label = stem.split("Experimental table_", 1)[-1]
         df.insert(0, "investigation", label)
         df.insert(1, "psi_id", psi_id)
         tables[f"{label} ({psi_id})"] = df
@@ -42,14 +50,18 @@ def safe(df):
     return out
 
 
-tables = load_tables()
+try:
+    tables = load_tables()
+except Exception as e:
+    st.error(f"Could not load data from AWS: {e}")
+    st.stop()
 
 st.title("Flame in Freefall")
 st.caption("SI-powered fire safety insights from microgravity combustion data")
 st.caption("Data: NASA Physical Science Informatics (PSI). Verify important values against the source.")
 
 if not tables:
-    st.error("No 'Experimental table' CSV files found next to app.py.")
+    st.error("The Lambda function returned no tables. Check the S3 data folder.")
     st.stop()
 
 names = list(tables)
