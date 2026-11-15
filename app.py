@@ -4,6 +4,7 @@ import pandas as pd
 import plotly.express as px
 import requests
 import streamlit as st
+from streamlit_mic_recorder import speech_to_text
 
 st.set_page_config(page_title="Flame in Freefall", layout="wide")
 
@@ -93,7 +94,18 @@ with tab_over:
 with tab_explore:
     pick = st.selectbox("Investigation", chosen, key="explore_pick")
     df = tables[pick]
-    query = st.text_input("Search all columns")
+    # Voice search: the browser turns speech into text, which fills the search box.
+    # Works in Chrome, Edge and Safari. Not in Firefox.
+    spoken = speech_to_text(
+        language="en",
+        start_prompt="🎤 Speak to search",
+        stop_prompt="⏹ Stop",
+        just_once=True,
+        key="voice_search",
+    )
+    if spoken:
+        st.session_state["search_text"] = spoken
+    query = st.text_input("Search all columns", key="search_text")
     if query:
         mask = (
             df.astype(str)
